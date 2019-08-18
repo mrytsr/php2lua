@@ -1,0 +1,19 @@
+{
+    "require": {
+        "symfony/yaml": "^3.1",
+        "nikic/php-parser": "^3.1"
+    }, "config": {
+        "optimize-autoloader":true,
+        "preferred-install": {
+            "*": "dist"
+        },
+        "secure-http":false
+    }, "repositories": [
+        {
+            "type": "composer",
+            "url": "https://packagist.phpcomposer.com"
+        }, {
+             "packagist": false 
+        }
+    ]
+}
