@@ -107,8 +107,7 @@ function render_params($stmt_params){
     return ci(', ', $params);
 }
 
-function render_stmt($stmt, $father = null){
-    global $var_reg;
+function render_stmt($stmt, &$var_reg = [], $father = null){
     if(is_string($stmt)){
         return [$stmt];
     }elseif(is_array($stmt) and empty($stmt)){
@@ -120,6 +119,7 @@ function render_stmt($stmt, $father = null){
     if(!isset($stmt['nodeType'])){
         $code = [];
         $return = 0;
+        $local_var_reg = $var_reg;
         foreach($stmt as $s){
             if($s['nodeType'] == 'Stmt_Return'){
                 if($return){
@@ -128,9 +128,9 @@ function render_stmt($stmt, $father = null){
                 $return++;
             }
             if(isset($s['attributes']['comments'])){
-                $code = array_merge($code, render_stmt($s['attributes']['comments'], $stmt));
+                $code = array_merge($code, render_stmt($s['attributes']['comments']));
             }
-            $code = array_merge($code, render_stmt($s, $stmt));
+            $code = array_merge($code, render_stmt($s, $local_var_reg, $stmt));
         }
         return $code;
     }
@@ -140,25 +140,25 @@ function render_stmt($stmt, $father = null){
 
     case 'Expr_Isset':
         $vars = array_map(function($item){
-            return render_stmt($item);
+            return render_stmt($item, $var_reg);
         }, $stmt['vars']);
         return ci(', ', $vars);
     case 'Stmt_Unset':
         $vars = array_map(function($item){
-            return render_stmt($item);
+            return render_stmt($item, $var_reg);
         }, $stmt['vars']);
         return cm('-- unset(', ci(', ', $vars), ')');
     case 'Const':
         $name = $stmt['name'];
-        $value = render_stmt($stmt['value']);
+        $value = render_stmt($stmt['value'], $var_reg);
         return cm('_M.', $name, ' = ', $value);
     case 'Expr_ClassConstFetch':
-        $class = render_stmt($stmt['class']);
+        $class = render_stmt($stmt['class'], $var_reg);
         $name = $stmt['name'];
         return cm($class, '.', $name);
     case 'Stmt_ClassConst':
         return array_map(function($const){
-            return render_stmt($const);
+            return render_stmt($const, $var_reg);
         }, $stmt['consts']);
     case 'Scalar_MagicConst_Function':
         return ['-- Scalar_MagicConst_Function'];
@@ -173,7 +173,7 @@ function render_stmt($stmt, $father = null){
     case 'Stmt_Static':
         $arr = [];
         $lines = array_map(function($var){
-            $default = render_stmt($var['default']);
+            $default = render_stmt($var['default'], $var_reg);
             $name = $var['name'];
             return cm(
                 'if not ', $name, ' then',
@@ -192,39 +192,39 @@ function render_stmt($stmt, $father = null){
     case 'Expr_Closure':
         return cm(
             'function(', render_params($stmt['params']), ')',
-                [render_stmt($stmt['stmts'])],
+                [render_stmt($stmt['stmts'], $var_reg)],
                 'end'
             );
     case 'Expr_PropertyFetch':
-        $var = render_stmt($stmt['var']);
+        $var = render_stmt($stmt['var'], $var_reg);
         $name = $stmt['name'];
         if($var == 'this'){
             $var = 'self';
         }
         return cm($var, '.', $name);
     case 'Expr_AssignOp_Minus':
-        $var = render_stmt($stmt['var']);
-        $expr = render_stmt($stmt['expr']);
+        $var = render_stmt($stmt['var'], $var_reg);
+        $expr = render_stmt($stmt['expr'], $var_reg);
         return cm($var, ' = ', $var, ' - ', $expr);
     case 'Expr_AssignOp_Plus':
-        $var = render_stmt($stmt['var']);
-        $expr = render_stmt($stmt['expr']);
+        $var = render_stmt($stmt['var'], $var_reg);
+        $expr = render_stmt($stmt['expr'], $var_reg);
         return cm($var, ' = ', $var, ' + ', $expr);
     case 'Expr_AssignOp_Concat':
-        $var = render_stmt($stmt['var']);
-        $expr = render_stmt($stmt['expr']);
+        $var = render_stmt($stmt['var'], $var_reg);
+        $expr = render_stmt($stmt['expr'], $var_reg);
         return cm($var, ' = ', $var, '..', $expr);
     case 'Stmt_PropertyProperty':
         $name = $stmt['name'];
         if($stmt['default']){
-            return cm($name, ' = ', render_stmt($stmt['default']));
+            return cm($name, ' = ', render_stmt($stmt['default'], $var_reg));
         }else{
             return cm($name, ' = nil');
         }
     case 'Stmt_Property':
         $flags = $stmt['flags'];
         $props = array_map(function($prop) use($flags){
-            return render_stmt($prop);
+            return render_stmt($prop, $var_reg);
         }, $stmt['props']);
         switch($flags){
         case 12:
@@ -238,9 +238,9 @@ function render_stmt($stmt, $father = null){
     case 'Name_FullyQualified':
         return ci('.', $stmt['parts']);
     case 'Expr_Empty':
-        return cm('lup.empty(', render_stmt($stmt['expr']), ')');
+        return cm('lup.empty(', render_stmt($stmt['expr'], $var_reg), ')');
     case 'Expr_ErrorSuppress':
-        return cm('lup.a(', render_stmt($stmt['expr'], $nodeType), ')');
+        return cm('lup.a(', render_stmt($stmt['expr'], $var_reg, $nodeType), ')');
     case 'Stmt_Break':
         foreach($father as $s){
             if($s['nodeType'] == 'Stmt_Return'){
@@ -249,14 +249,14 @@ function render_stmt($stmt, $father = null){
         }
         return ['goto _break'];
     case 'Stmt_Switch':
-        $cond = render_stmt($stmt['cond']);
+        $cond = render_stmt($stmt['cond'], $var_reg);
 
         $cases = [];
         $conds = [];
         foreach($stmt['cases'] as $case){
 
             if($case['cond']){
-                $conds[] = cm('[', render_stmt($case['cond']), ']=1');
+                $conds[] = cm('[', render_stmt($case['cond'], $var_reg), ']=1');
             }
             if($case['stmts']){
                 if($conds){
@@ -265,7 +265,7 @@ function render_stmt($stmt, $father = null){
                     $cases[] = cm('if true then');
                 }
                 $cases[] = cm(
-                    [render_stmt($case['stmts'])], 
+                    [render_stmt($case['stmts'], $var_reg)], 
                     'end'
                 );
                 $conds = [];
@@ -283,28 +283,28 @@ function render_stmt($stmt, $father = null){
 
     case 'Scalar_Encapsed':
         $parts = array_map(function($part){
-            return render_stmt($part);
+            return render_stmt($part, $var_reg);
         }, $stmt['parts']);
         return ci('..', $parts);
     case 'Expr_New':
-        $class = render_stmt($stmt['class']);
+        $class = render_stmt($stmt['class'], $var_reg);
         $args =  render_args($stmt['args']);
         return cm($class, '.new(', $args, ')');
     case 'Expr_FuncCall':
-        $name = render_stmt($stmt['name']);
-        $args = render_args($stmt['args']);
+        $name = render_stmt($stmt['name'], $var_reg);
+        $args = render_args($stmt['args'], $var_reg);
         if(@$father['nodeType'] == 'Expr_ErrorSuppress'){
             return cm($name, ', ', $args, ')');
         }else{
             return cm($name, '(', $args, ')');
         }
     case 'Expr_MethodCall':
-        $var  = render_stmt($stmt['var']);
+        $var  = render_stmt($stmt['var'], $var_reg);
         $name = $stmt['name'];
         if(is_string($name)){
             $name = ["'$name'"];
         }else{
-            $name = render_stmt($stmt['name']);
+            $name = render_stmt($stmt['name'], $var_reg);
         }
         $args = render_args($stmt['args']);
         if(preg_match('/^\'[_a-zA-Z][_a-zA-Z0-9]*\'$/', $name[0])){
@@ -314,8 +314,8 @@ function render_stmt($stmt, $father = null){
             return cm($var, '[', $name, '](', ci(', ', $args), ')');
         }
     case 'Expr_StaticCall':
-        $class  = render_stmt($stmt['class']);
-        $name = render_stmt($stmt['name']);
+        $class  = render_stmt($stmt['class'], $var_reg);
+        $name = render_stmt($stmt['name'], $var_reg);
         if($class[0] == 'self'){
             $class[0] = '_M';
         }
@@ -337,13 +337,13 @@ function render_stmt($stmt, $father = null){
             }
         }
     case 'Expr_Ternary':
-        $cond = render_stmt($stmt['cond']);
-        $if = render_stmt($stmt['if']);
-        $else = render_stmt($stmt['else']);
+        $cond = render_stmt($stmt['cond'], $var_reg);
+        $if = render_stmt($stmt['if'], $var_reg);
+        $else = render_stmt($stmt['else'], $var_reg);
         return cm($cond, ' and ', $if, ' or ', $else);
     case 'Stmt_Class':
         $name = $stmt['name'];
-        $stmts = render_stmt($stmt['stmts']);
+        $stmts = render_stmt($stmt['stmts'], $var_reg);
         $arr = cm('', 'local _M = {}');
         foreach($stmts as $s){
             $arr[] = $s;
@@ -393,12 +393,13 @@ function render_stmt($stmt, $father = null){
             case 'PATHINFO_EXTENSION':
             case 'time':
             case 'strtolower':
+            case 'http_build_query':
                 return cm('lup.', $part);
             case 'sleep':
             case 'md5':
                 return cm('ngx.', $part);
-            case 'http_build_query':
-                return 'ngx.encode_args';
+            case 'Ipinfo':
+                return $part;
             case 'Config':
             case 'Log':
             case 'Client':
@@ -423,32 +424,32 @@ function render_stmt($stmt, $father = null){
         }
         return cm('error(', $error, ')');
     case 'Stmt_Catch':
-        $types = render_stmt($stmt['types'][0]);
+        $types = render_stmt($stmt['types'][0], $var_reg);
         $var = $stmt['var'];
         return cm(', function(', $var, ')',
-            [render_stmt($stmt['stmts'])],
+            [render_stmt($stmt['stmts'], $var_reg)],
             'end'
         );
     case 'Stmt_TryCatch':
-        $caches = render_stmt($stmt['catches'][0]);
+        $caches = render_stmt($stmt['catches'][0], $var_reg);
         foreach($caches as $cache){
             $arr[] = $cache;
         }
         return cm(
             'local ok, ret = xpcall(function()',
-                [render_stmt($stmt['stmts'])],
+                [render_stmt($stmt['stmts'], $var_reg)],
                 'end', $caches, ')'
             );
     case 'Stmt_Echo':
         $exprs = array_map(function($item){
-            return render_stmt($item);
+            return render_stmt($item, $var_reg);
         }, $stmt['exprs']);
         return cm('ngx.print(', ci(', ', $exprs), ')');
     case 'Stmt_UseUse':
-        return render_stmt($stmt['name']);
+        return render_stmt($stmt['name'], $var_reg);
     case 'Stmt_Use':
-        $uses = array_map(function($use)use($nodeType){
-            $name = render_stmt($use, $nodeType);
+        $uses = array_map(function($use)use($father){
+            $name = render_stmt($use, $var_reg, $father);
             $names = explode('.', $name[0]);
             $lastname = $names[count($names)-1];
             return cm('local ', $lastname, ' = require \'', $name, '\'');
@@ -456,15 +457,15 @@ function render_stmt($stmt, $father = null){
         return ci(',', $uses);
     case 'Expr_Include':
         $expr = $stmt['expr'];
-        return cm('-- require(', render_stmt($expr), ')');
+        return cm('-- require(', render_stmt($expr, $var_reg), ')');
     case 'Expr_ArrayDimFetch':
         $dim = $stmt['dim'];
         if($dim){
-            $dim = render_stmt($dim);
+            $dim = render_stmt($dim, $var_reg);
         }else{
             $dim = [''];
         }
-        $var = render_stmt($stmt['var']);
+        $var = render_stmt($stmt['var'], $var_reg);
         if(preg_match('/^\'[_a-zA-Z][_a-zA-Z0-9]*\'$/', $dim[0])){
             $var = cm($var, '.', trim($dim[0], '\''));
         }else{
@@ -479,6 +480,9 @@ function render_stmt($stmt, $father = null){
     case 'Comment_Doc':
         $count = 0;
         $ret = ltrim($stmt['text']);
+        /* if(rtrim($ret) == '//EMPTYLINE'){ */
+        /*     return ['']; */
+        /* } */
         $ret = preg_replace('@\*/$@', ' ]]--', rtrim($ret), 1, $count);
         if($count){
             $ret = preg_replace('@^/\*@', '--[[ ', $ret, 1, $count);
@@ -487,23 +491,23 @@ function render_stmt($stmt, $father = null){
         }
         return [$ret];
     case 'Expr_UnaryMinus':
-        return '-'.render_stmt($stmt['expr']);
+        return '-'.render_stmt($stmt['expr'], $var_reg);
     case 'Expr_ConstFetch':
-        $name = render_stmt($stmt['name']);
+        $name = render_stmt($stmt['name'], $var_reg);
         if($name[0] == 'null'){
             $name[0] = 'nil';
         }
         return $name;
     case 'Stmt_Return':
         if($stmt['expr']){
-            $expr = render_stmt($stmt['expr']);
+            $expr = render_stmt($stmt['expr'], $var_reg);
             return cm('return ', $expr);
         }else{
             return ['return nil'];
         }
     case 'Stmt_Return2':
         if($stmt['expr']){
-            $expr = render_stmt($stmt['expr']);
+            $expr = render_stmt($stmt['expr'], $var_reg);
             return cm('-- return ', $expr);
         }else{
             return ['-- return nil'];
@@ -517,56 +521,57 @@ function render_stmt($stmt, $father = null){
         }
         $val = $stmt['valueVar']['name'];
         return cm(
-            'for ', $key, ', ', $val, ' in ipairs(', render_stmt($stmt['expr']), ') do',
-            [render_stmt($stmt['stmts'])],
+            'for ', $key, ', ', $val, ' in ipairs(', render_stmt($stmt['expr'], $var_reg), ') do',
+            [render_stmt($stmt['stmts'], $var_reg)],
             'end'
         );
     case 'Stmt_Do':
-        $stmts = render_stmt($stmt['stmts']);
+        $stmts = render_stmt($stmt['stmts'], $var_reg);
         array_unshift($stmts,  '::continue::');
         array_push($stmts, '::_break::');
         return cm(
             'repeat',
             [$stmts],
-            'until ', render_stmt($stmt['cond'])
+            'until ', render_stmt($stmt['cond'], $var_reg)
         );
     case 'Stmt_While':
-        $stmts = render_stmt($stmt['stmts']);
+        $stmts = render_stmt($stmt['stmts'], $var_reg);
         array_unshift($stmts,  '::continue::');
         array_push($stmts, '::_break::');
         return cm(
-            'while ', render_stmt($stmt['cond']), ' do', 
+            'while ', render_stmt($stmt['cond'], $var_reg), ' do', 
             [$stmts],
             'end'
         );
     case 'Stmt_For':
-        $stmts = render_stmt($stmt['stmts']);
+        $stmts = render_stmt($stmt['stmts'], $var_reg);
         array_unshift($stmts,  '::continue::');
         array_push($stmts, '::_break::');
-        return array_merge(['-- for => while'], render_stmt($stmt['init'][0]), cm(
-            'while ', render_stmt($stmt['cond'][0]), ' do', 
+        return array_merge(['-- for => while'], render_stmt($stmt['init'][0], $var_reg), cm(
+            'while ', render_stmt($stmt['cond'][0], $var_reg), ' do', 
             [$stmts],
-            [render_stmt($stmt['loop'][0])],
+            [render_stmt($stmt['loop'][0], $var_reg)],
             'end'
         ));
     case 'Stmt_ElseIf':
-        $cond = render_stmt($stmt['cond']);
+        $cond = render_stmt($stmt['cond'], $var_reg);
         return cm(
             'elseif ', $cond, ' then', 
-            [render_stmt($stmt['stmts'])]
+            [render_stmt($stmt['stmts'], $var_reg)]
         );
     case 'Stmt_Else':
         return cm(
             'else',
-            [render_stmt($stmt['stmts'])]
+            [render_stmt($stmt['stmts'], $var_reg)]
         );
     case 'Stmt_If':
-        $cond = render_stmt($stmt['cond']);
+        $cond = render_stmt($stmt['cond'], $var_reg);
+        $if_stmts = render_stmt($stmt['stmts'], $var_reg);
 
         $elseifs = [];
         if($stmt['elseifs']){
-            $elseifs = array_reduce($stmt['elseifs'], function($carry, $elseif){
-                foreach(render_stmt($elseif) as $line){
+            $elseifs = array_reduce($stmt['elseifs'], function($carry, $elseif)use($var_reg){
+                foreach(render_stmt($elseif, $var_reg) as $line){
                     $carry[] = $line;
                 }
                 return $carry;
@@ -574,12 +579,12 @@ function render_stmt($stmt, $father = null){
         }
         $else = [];
         if($stmt['else']){
-            $else = render_stmt($stmt['else']);
+            $else = render_stmt($stmt['else'], $var_reg);
         }
 
         return cm(
             'if ', $cond, ' then', 
-            [render_stmt($stmt['stmts'])], 
+            [$if_stmts], 
             $elseifs,
             $else,
             'end'
@@ -593,11 +598,11 @@ function render_stmt($stmt, $father = null){
         $name = $stmt['var']['name'];
         return cm($name, ' = ', $name, ' + 1');
     case 'Expr_BitwiseNot':
-        return cm('bit.bnot(', render_stmt($stmt['expr']), ')');
+        return cm('bit.bnot(', render_stmt($stmt['expr'], $var_reg), ')');
     case 'Expr_BinaryOp_BitwiseAnd':
-        return cm('bit.band(', render_stmt($stmt['left']), ', ', render_stmt($stmt['right']), ')');
+        return cm('bit.band(', render_stmt($stmt['left'], $var_reg), ', ', render_stmt($stmt['right'], $var_reg), ')');
     case 'Expr_BinaryOp_BitwiseOr':
-        return cm('bit.bor(', render_stmt($stmt['left']), ', ', render_stmt($stmt['right']), ')');
+        return cm('bit.bor(', render_stmt($stmt['left'], $var_reg), ', ', render_stmt($stmt['right'], $var_reg), ')');
     case 'Expr_BinaryOp_GreaterOrEqual':
         return render_op($stmt['left'], ' >= ', $stmt['right']);
     case 'Expr_BinaryOp_NotEqual':
@@ -624,7 +629,7 @@ function render_stmt($stmt, $father = null){
     case 'Expr_BinaryOp_Minus':
         return render_op($stmt['left'], ' - ', $stmt['right']);
     case 'Expr_BooleanNot':
-        return cm('not ', render_stmt($stmt['expr']));
+        return cm('not ', render_stmt($stmt['expr'], $var_reg));
     case 'Expr_BinaryOp_LogicalAnd':
     case 'Expr_BinaryOp_BooleanAnd':
         return render_op($stmt['left'], ' and ', $stmt['right']);
@@ -634,9 +639,9 @@ function render_stmt($stmt, $father = null){
     case 'Expr_BinaryOp_Concat':
         return render_op($stmt['left'], '..', $stmt['right']);
     case 'Expr_Print':
-        return cm('ngx.print(', render_stmt($stmt['expr']), ')');
+        return cm('ngx.print(', render_stmt($stmt['expr'], $var_reg), ')');
     case 'Stmt_Namespace':
-        return render_stmt($stmt['stmts']);
+        return render_stmt($stmt['stmts'], $var_reg);
     case 'Expr_Variable':
         $name = $stmt['name'];
         switch($name){
@@ -645,26 +650,25 @@ function render_stmt($stmt, $father = null){
         case '_COOKIE':
         case '_REQUEST':
         case '_POST':
-            $name = cm('lup.', $name);
+            return cm('lup.', $name);
             break;
         case 'this':
-            $name = ['self'];
+            return ['self'];
             break;
         default:
-            break;
+            return [$name];
         }
-        return $name;
     case 'Scalar_DNumber':
     case 'Scalar_LNumber':
         return strval($stmt['value']);
     case 'Arg':
-        return render_stmt($stmt['value']);
+        return render_stmt($stmt['value'], $var_reg);
     case 'Expr_ArrayItem':
-        $value = render_stmt($stmt['value']);
+        $value = render_stmt($stmt['value'], $var_reg);
         if(empty($stmt['key'])){
             return cm($value, ',');
         }else{
-            $key = render_stmt($stmt['key'], $stmt);
+            $key = render_stmt($stmt['key'], $stmt, $var_reg);
             if(preg_match('/^\'[_a-zA-Z][_a-zA-Z0-9]*\'$/', $key[0])){
                 return cm(trim($key[0], '\''), ' = ', $value, ',');
             }else{
@@ -673,7 +677,7 @@ function render_stmt($stmt, $father = null){
         }
     case 'Expr_Array':
         $items = array_map(function($item){
-            return render_stmt($item);
+            return render_stmt($item, $var_reg);
         }, $stmt['items']);
         return cm('{', $items, '}');
     case 'Scalar_EncapsedStringPart':
@@ -683,13 +687,13 @@ function render_stmt($stmt, $father = null){
         $value = preg_replace('@\\\@', '\\\\\\', $value);
         return ["'$value'"];
     case 'Expr_Cast_Int':
-        return cm('tonumber(', render_stmt($stmt['expr']), ')');
+        return cm('tonumber(', render_stmt($stmt['expr'], $var_reg), ')');
     case 'Expr_Assign':
-        $var = render_stmt($stmt['var']);
-        $expr = render_stmt($stmt['expr']);
+        $var = render_stmt($stmt['var'], $var_reg);
+        $expr = render_stmt($stmt['expr'], $var_reg);
         if(!isset($var_reg[$var[0]])){
             $var_reg[$var[0]] = true;
-            if(preg_match('/^[_a-zAz][_0-9a-zAz]*$/', $var[0])){
+            if(preg_match('/^[_a-zAZ][_0-9a-zAZ]*$/', $var[0])){
                 return cm('local ', $var, ' = ', $expr);
             }
         }
@@ -699,7 +703,7 @@ function render_stmt($stmt, $father = null){
         $flags = $stmt['flags'];
         $name = $stmt['name'];
         $params = render_params($stmt['params']);
-        $stmts = [render_stmt($stmt['stmts'])];
+        $stmts = [render_stmt($stmt['stmts'], $var_reg)];
         if($name == '__construct'){
             $name = 'new';
             array_unshift($stmts, [
@@ -741,7 +745,7 @@ function render_stmt($stmt, $father = null){
         $name = $stmt['name'];
         return cm(
             'function ', $name, '(', render_params($stmt['params']), ')',
-            [render_stmt($stmt['stmts'])],
+            [render_stmt($stmt['stmts'], $var_reg)],
             'end'
         );
     case 'Scalar_MagicConst_Dir':
@@ -798,7 +802,20 @@ try {
         $ext = pathinfo($f, PATHINFO_EXTENSION);
         $filename = pathinfo($f, PATHINFO_FILENAME);
         if($ext == 'php'){
-            $ast = json_decode(json_encode($parser->parse(file_get_contents($f))), true);
+
+            $handle = fopen($f, 'r');
+            // 处理空行
+            $new = [];
+            while($line = fgets($handle)){
+                if(preg_match('/^\s*$/', $line)){
+                    $new[] = "//EMPTYLINE\n";
+                }else{
+                    $new[] = $line;
+                }
+            }
+            $content = implode('', $new);
+
+            $ast = json_decode(json_encode($parser->parse($content)), true);
             $code = render_stmt($ast);
 
             ob_start();
@@ -810,6 +827,17 @@ try {
             echo "local lup = require 'lib.lup'\n";
             dumpcode($code, 0);
             $buffer = ob_get_clean();
+
+            $newbuffer = [];
+            foreach(preg_split("/((\r?\n)|(\r\n?))/", $buffer) as $line){
+                if(preg_match('/EMPTYLINE/', $line)){
+                    echo 'EMPTYLINE';
+                    $newbuffer[] = '';
+                }else{
+                    $newbuffer[] = $line;
+                }
+            } 
+            $buffer = implode("\n", $newbuffer);
 
             if(!$output_dir){
                 echo $buffer;
