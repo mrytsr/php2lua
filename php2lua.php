@@ -392,6 +392,8 @@ function render_stmt($stmt, &$var_reg = [], $father = null){
             case 'FILTER_VALIDATE_IP':
             case 'PATHINFO_EXTENSION':
             case 'time':
+            case 'implode':
+            case 'explode':
             case 'strtolower':
             case 'http_build_query':
                 return cm('lup.', $part);
@@ -480,9 +482,6 @@ function render_stmt($stmt, &$var_reg = [], $father = null){
     case 'Comment_Doc':
         $count = 0;
         $ret = ltrim($stmt['text']);
-        /* if(rtrim($ret) == '//EMPTYLINE'){ */
-        /*     return ['']; */
-        /* } */
         $ret = preg_replace('@\*/$@', ' ]]--', rtrim($ret), 1, $count);
         if($count){
             $ret = preg_replace('@^/\*@', '--[[ ', $ret, 1, $count);
@@ -831,7 +830,6 @@ try {
             $newbuffer = [];
             foreach(preg_split("/((\r?\n)|(\r\n?))/", $buffer) as $line){
                 if(preg_match('/EMPTYLINE/', $line)){
-                    echo 'EMPTYLINE';
                     $newbuffer[] = '';
                 }else{
                     $newbuffer[] = $line;
