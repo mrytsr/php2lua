@@ -344,7 +344,25 @@ function render_stmt($stmt, &$var_reg = [], $father = null){
     case 'Stmt_Class':
         $name = $stmt['name'];
         $stmts = render_stmt($stmt['stmts'], $var_reg);
-        $arr = cm('', 'local _M = {}');
+
+        if($stmt['extends']){
+            $extends = render_stmt($stmt['extends']);
+            $arr = cm('', 'local _M = ', $extends, '.new()');
+        }else{
+            $arr = cm('', 'local _M = {}');
+        }
+
+        $arr[] = 'function _M.new(...)';
+        $arr[] = [
+            'local self = {}',
+            'self = setmetatable(self, {__index = _M})',
+            'if self.__construct then',
+            ['self:__construct(...)'],
+            'end',
+            'return self'
+        ];
+        $arr[] = 'end';
+
         foreach($stmts as $s){
             $arr[] = $s;
         }
@@ -490,7 +508,7 @@ function render_stmt($stmt, &$var_reg = [], $father = null){
         }
         return [$ret];
     case 'Expr_UnaryMinus':
-        return '-'.render_stmt($stmt['expr'], $var_reg);
+        return cm('-', render_stmt($stmt['expr'], $var_reg));
     case 'Expr_ConstFetch':
         $name = render_stmt($stmt['name'], $var_reg);
         if($name[0] == 'null'){
@@ -703,15 +721,15 @@ function render_stmt($stmt, &$var_reg = [], $father = null){
         $name = $stmt['name'];
         $params = render_params($stmt['params']);
         $stmts = [render_stmt($stmt['stmts'], $var_reg)];
-        if($name == '__construct'){
-            $name = 'new';
-            array_unshift($stmts, [
-                '_M.__index = _M',
-                'local self = {}',
-            ]);
-            $stmts[] = ['return setmetatable(self, _M)'];
-            $flags = 0;
-        }
+        // if($name == '__construct'){
+        //     $name = 'new';
+        //     array_unshift($stmts, [
+        //         '_M.__index = _M',
+        //         'local self = {}',
+        //     ]);
+        //     $stmts[] = ['return setmetatable(self, _M)'];
+        //     $flags = 0;
+        // }
 
         switch($flags){
         case 12:
@@ -824,6 +842,7 @@ try {
             echo "-- php2lua: $f\n";
             echo "--\n";
             echo "local lup = require 'lib.lup'\n";
+            echo "local base = require 'ctrl.base'\n";
             dumpcode($code, 0);
             $buffer = ob_get_clean();
 
